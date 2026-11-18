@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>점프 러너</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #120a05; overflow: hidden; font-family: "Malgun Gothic", system-ui, sans-serif; }
+  #wrap { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  canvas { touch-action: none; border-radius: 10px; box-shadow: 0 0 50px rgba(255,209,102,.2); }
+  .back { position: fixed; left: 12px; top: 10px; z-index: 5; color: #fff6e0; text-decoration: none; font-size: 14px; background: rgba(0,0,0,.3); padding: 7px 14px; border-radius: 20px; }
+</style>
+</head>
+<body>
+<a class="back" href="../index.html">← 게임 목록</a>
+<div id="wrap"><canvas id="c" width="800" height="450"></canvas></div>
+<script>
+(() => {
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height, GROUND = 370;
+function fit() { const s = Math.min(innerWidth / W, innerHeight / H) * 0.98; cv.style.width = W * s + 'px'; cv.style.height = H * s + 'px'; }
+addEventListener('resize', fit); fit();
+
+let actx = null;
+function beep(f, d, type = 'square', v = 0.05, slide = 0) {
+  try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return; }
+  const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime;
+  o.type = type; o.frequency.setValueAtTime(f, t); if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, f + slide), t + d);
+  g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+  o.connect(g); g.connect(actx.destination); o.start(); o.stop(t + d);
+}
+const rand = (a, b) => a + Math.random() * (b - a);
+
+let state = 'title', frame = 0, best = 0;
+let P, obs, coins, parts, pops, speed, dist, scroll, nextGap, coinCount, shake, overAt = 0;
+let clouds = Array.from({ length: 6 }, () => ({ x: rand(0, W), y: rand(30, 160), s: rand(0.6, 1.4) }));
+try { best = +localStorage.getItem('runner_best') || 0; } catch (e) {}
+
+function start() {
+  state = 'play';
+  P = { x: 150, y: GROUND, vy: 0, ground: true, jumps: 0, slide: false, dead: false, rot: 0, sq: 1 };
+  obs = []; coins = []; parts = []; pops = []; speed = 7; dist = 0; scroll = 0; nextGap = 500; coinCount = 0; shake = 0;
+  beep(440, 0.1, 'triangle'); setTimeout(() => beep(660, 0.12, 'triangle'), 90);
+}
+const meters = () => Math.floor(dist / 25);
+
+// ---------- 입력 ----------
+const keys = {};
+let holdJump = false, touchSlide = false;
+function jump() {
+  if (state !== 'play' || P.dead) return;
+  if (P.ground) { P.vy = -13.5; P.ground = false; P.jumps = 1; P.sq = 1.25; beep(520, 0.1, 'square', 0.04, 300); dust(P.x, GROUND, 6); }
+  else if (P.jumps < 2) { P.vy = -11.5; P.jumps = 2; P.rot = 0.001; beep(700, 0.12, 'square', 0.04, 400); for (let i = 0; i < 10; i++) parts.push({ x: P.x, y: P.y - 20, vx: rand(-3, 3), vy: rand(0, 3), life: 20, max: 20, c: '#7fe8ff', s: 3 }); }
+}
+addEventListener('keydown', e => {
+  if (['Space', 'ArrowUp', 'ArrowDown'].includes(e.code)) e.preventDefault();
+  if (e.repeat) return;
+  keys[e.code] = true;
+  if (state !== 'play' && state !== 'pause') { if ((e.code === 'Space' || e.code === 'Enter') && performance.now() - overAt > 600) start(); return; }
+  if (e.code === 'KeyP') { state = state === 'pause' ? 'play' : 'pause'; return; }
+  if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') { holdJump = true; jump(); }
+});
+addEventListener('keyup', e => { keys[e.code] = false; if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') holdJump = false; });
+cv.addEventListener('pointerdown', e => {
+  cv.setPointerCapture(e.pointerId);
+  if (state !== 'play') { if (state !== 'pause' && performance.now() - overAt > 600) start(); return; }
+  const r = cv.getBoundingClientRect();
+  if (e.clientX - r.left < r.width * 0.4) touchSlide = true; else { holdJump = true; jump(); }
+});
+cv.addEventListener('pointerup', () => { touchSlide = false; holdJump = false; });
+
+// ---------- 생성 ----------
+function dust(x, y, n) { for (let i = 0; i < n; i++) parts.push({ x, y, vx: rand(-2, 0.5), vy: rand(-2, -0.3), life: rand(15, 30), max: 30, c: '#d9b38c', s: rand(3, 6) }); }
+function spawn() {
+  const m = meters(), r = Math.random();
+  let o;
+  if (m > 150 && r < 0.22) o = { type: 'drone', w: 52, h: 28, y: GROUND - 76 };
+  else if (r < 0.45) o = { type: 'crate', w: 42, h: 42, y: GROUND - 42 };
+  else if (r < 0.68) o = { type: 'spike', w: 64, h: 26, y: GROUND - 26 };
+  else if (r < 0.85 || m < 80) o = { type: 'tall', w: 36, h: 78, y: GROUND - 78 };
+  else o = { type: 'crate2', w: 84, h: 42, y: GROUND - 42 };
+  o.x = W + 40; o.t = 0; obs.push(o);
+  if (o.type !== 'drone' && Math.random() < 0.45) for (let i = 0; i < 5; i++) coins.push({ x: o.x - 50 + i * (o.w + 100) / 4, y: GROUND - 70 - Math.sin(i / 4 * Math.PI) * 75, t: rand(0, 6) });
+  else if (Math.random() < 0.4) for (let i = 0; i < 4; i++) coins.push({ x: o.x + 200 + i * 34, y: GROUND - 22, t: rand(0, 6) });
+  nextGap = rand(260, 480) + speed * 16;
+}
+
+function die() {
+  P.dead = true; P.vy = -11; shake = 14; state = 'dying';
+  for (let i = 0; i < 30; i++) parts.push({ x: P.x, y: P.y - 25, vx: rand(-5, 5), vy: rand(-6, 2), life: rand(25, 50), max: 50, c: ['#ffb347', '#7fe8ff', '#ffffff'][i % 3], s: rand(3, 6) });
+  beep(180, 0.6, 'sawtooth', 0.07, -140);
+}
+
+// ---------- 업데이트 ----------
+function update() {
+  frame++;
+  for (const c of clouds) { c.x -= (state === 'play' ? speed : 3) * 0.08 * c.s; if (c.x < -120) { c.x = W + rand(20, 200); c.y = rand(30, 160); } }
+  for (const p of parts) { p.x += p.vx - (state === 'play' ? speed * 0.3 : 0); p.y += p.vy; p.vy += 0.15; p.life--; }
+  parts = (parts || []).filter(p => p.life > 0);
+  for (const p of (pops || [])) p.life--; pops = (pops || []).filter(p => p.life > 0);
+  shake = (shake || 0) * 0.85;
+  if (state === 'dying') {
+    P.vy += 0.6; P.y += P.vy; P.rot += 0.25; P.x -= 1;
+    if (P.y > H + 80) { state = 'over'; overAt = performance.now(); const m = meters(); if (m > best) { best = m; try { localStorage.setItem('runner_best', best); } catch (e) {} } }
+    return;
+  }
+  if (state !== 'play') { if (state === 'title') scroll += 2; return; }
+
+  speed = Math.min(16, 7 + dist / 6000);
+  dist += speed; scroll += speed;
+  // 플레이어
+  const wantSlide = keys.ArrowDown || keys.KeyS || touchSlide;
+  if (!P.ground) {
+    P.vy += holdJump && P.vy < 0 ? 0.55 : 0.8;
+    if (wantSlide) P.vy += 0.9;
+    P.y += P.vy;
+    if (P.rot) { P.rot += 0.35; if (P.rot >= Math.PI * 2) P.rot = 0; }
+    if (P.y >= GROUND) { P.y = GROUND; P.vy = 0; P.ground = true; P.jumps = 0; P.rot = 0; P.sq = 0.75; dust(P.x, GROUND, 8); beep(140, 0.06, 'sine', 0.05); }
+  }
+  if (P.slide !== (wantSlide && P.ground)) { P.slide = wantSlide && P.ground; if (P.slide) beep(260, 0.12, 'sine', 0.04, -120); }
+  P.sq += (1 - P.sq) * 0.2;
+  if (P.ground && frame % 4 === 0) dust(P.x - 12, GROUND, P.slide ? 2 : 1);
+  if (P.slide && frame % 2 === 0) parts.push({ x: P.x - 20, y: GROUND - 2, vx: -2, vy: -rand(0.5, 2), life: 12, max: 12, c: '#ffd166', s: 3 });
+
+  // 장애물
+  nextGap -= speed; if (nextGap <= 0) spawn();
+  const ph = P.slide ? 26 : 50, pw = P.slide ? 48 : 30;
+  const box = { x: P.x - pw / 2 + 4, y: P.y - ph + 4, w: pw - 8, h: ph - 6 };
+  for (const o of obs) {
+    o.x -= speed; o.t++;
+    if (o.type === 'drone') o.y = GROUND - 76 + Math.sin(o.t / 10) * 4;
+    const m = o.type === 'spike' ? 10 : 4;
+    if (box.x < o.x + o.w - m && box.x + box.w > o.x + m && box.y < o.y + o.h && box.y + box.h > o.y + (o.type === 'spike' ? 8 : 2)) { die(); return; }
+  }
+  obs = obs.filter(o => o.x > -120);
+  for (const c of coins) {
+    c.x -= speed; c.t += 0.15;
+    if (Math.abs(c.x - P.x) < 24 && Math.abs(c.y - (P.y - ph / 2)) < ph / 2 + 12) {
+      c.got = true; coinCount++; dist += 250;
+      pops.push({ x: c.x, y: c.y, t: '+10', life: 30 }); beep(1300, 0.07, 'square', 0.03, 500);
+      for (let i = 0; i < 6; i++) parts.push({ x: c.x, y: c.y, vx: rand(-2, 2), vy: rand(-3, 1), life: 18, max: 18, c: '#ffd166', s: 3 });
+    }
+  }
+  coins = coins.filter(c => !c.got && c.x > -30);
+  if (meters() > 0 && meters() % 500 === 0 && frame % 1 === 0 && !P.milestone) { P.milestone = meters(); pops.push({ x: W / 2, y: 120, t: `${meters()}m 돌파!`, life: 80, big: true }); [660, 880, 1100].forEach((f, i) => setTimeout(() => beep(f, 0.1, 'triangle', 0.05), i * 80)); }
+  if (P.milestone && meters() !== P.milestone) P.milestone = 0;
+}
+
+// ---------- 그리기 ----------
+function hills(off, base, amp, f, col) {
+  ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(0, H);
+  for (let x = 0; x <= W; x += 10) { const wx = x + off; ctx.lineTo(x, base - (Math.sin(wx * f) * amp + Math.sin(wx * f * 2.7 + 1) * amp * 0.4 + Math.abs(Math.sin(wx * f * 0.5)) * amp * 0.6)); }
+  ctx.lineTo(W, H); ctx.fill();
+}
+function robot(x, y, slide, run) {
+  ctx.save(); ctx.translate(x, y);
+  if (P && P.rot) { ctx.translate(0, -25); ctx.rotate(P.rot); ctx.translate(0, 25); }
+  ctx.scale(1 / (P ? P.sq : 1), P ? P.sq : 1);
+  if (slide) {
+    ctx.fillStyle = '#ff9f43'; ctx.beginPath(); ctx.roundRect(-26, -24, 50, 20, 8); ctx.fill();
+    ctx.fillStyle = '#1b2a4a'; ctx.beginPath(); ctx.roundRect(4, -22, 18, 12, 4); ctx.fill();
+    ctx.fillStyle = '#7fe8ff'; ctx.fillRect(14, -19, 5, 5);
+    ctx.fillStyle = '#333'; ctx.beginPath(); ctx.arc(-14, -3, 5, 0, 7); ctx.arc(10, -3, 5, 0, 7); ctx.fill();
+  } else {
+    const a = Math.sin(run) * 0.8, air = P && !P.ground;
+    ctx.strokeStyle = '#3a3f52'; ctx.lineWidth = 7; ctx.lineCap = 'round';
+    for (const s of [1, -1]) { ctx.beginPath(); ctx.moveTo(0, -16); const ang = air ? 0.6 * s : a * s; ctx.lineTo(Math.sin(ang) * 14, -16 + Math.cos(ang) * 14 - (air && s > 0 ? 5 : 0)); ctx.stroke(); }
+    ctx.fillStyle = '#ff9f43'; ctx.beginPath(); ctx.roundRect(-14, -40, 28, 26, 7); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,.25)'; ctx.fillRect(-10, -36, 8, 18);
+    ctx.strokeStyle = '#3a3f52'; ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.moveTo(-4, -32); ctx.lineTo(-4 - Math.sin(run) * 10, -20); ctx.stroke();
+    ctx.fillStyle = '#e8ecf5'; ctx.beginPath(); ctx.roundRect(-13, -58, 28, 20, 6); ctx.fill();
+    ctx.fillStyle = '#1b2a4a'; ctx.beginPath(); ctx.roundRect(-4, -54, 16, 11, 3); ctx.fill();
+    ctx.fillStyle = '#7fe8ff'; ctx.fillRect(5, -51, 5, 5);
+    ctx.strokeStyle = '#e8ecf5'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(-6, -58); ctx.lineTo(-10, -66); ctx.stroke();
+    ctx.fillStyle = frame % 30 < 15 ? '#ff4d6d' : '#ffd166'; ctx.beginPath(); ctx.arc(-10, -67, 3, 0, 7); ctx.fill();
+  }
+  ctx.restore();
+}
+function obstacle(o) {
+  if (o.type === 'crate' || o.type === 'crate2') {
+    for (let i = 0; i < o.w / 42; i++) {
+      const x = o.x + i * 42;
+      ctx.fillStyle = '#b5773b'; ctx.fillRect(x, o.y, 42, 42); ctx.strokeStyle = '#7a4a1f'; ctx.lineWidth = 3; ctx.strokeRect(x + 1.5, o.y + 1.5, 39, 39);
+      ctx.beginPath(); ctx.moveTo(x + 3, o.y + 3); ctx.lineTo(x + 39, o.y + 39); ctx.moveTo(x + 39, o.y + 3); ctx.lineTo(x + 3, o.y + 39); ctx.stroke();
+    }
+  } else if (o.type === 'spike') {
+    ctx.fillStyle = '#9aa3b8';
+    for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.moveTo(o.x + i * 16, GROUND); ctx.lineTo(o.x + i * 16 + 8, o.y); ctx.lineTo(o.x + i * 16 + 16, GROUND); ctx.fill(); }
+    ctx.fillStyle = '#e5e9f5'; for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.moveTo(o.x + i * 16 + 8, o.y); ctx.lineTo(o.x + i * 16 + 11, o.y + 10); ctx.lineTo(o.x + i * 16 + 8, o.y + 10); ctx.fill(); }
+  } else if (o.type === 'tall') {
+    const g = ctx.createLinearGradient(o.x, 0, o.x + o.w, 0); g.addColorStop(0, '#5a6a8a'); g.addColorStop(1, '#3a4560');
+    ctx.fillStyle = g; ctx.fillRect(o.x, o.y, o.w, o.h);
+    ctx.fillStyle = '#ffd166'; for (let y = o.y + 8; y < GROUND - 8; y += 20) ctx.fillRect(o.x + 6, y, o.w - 12, 6);
+  } else {
+    ctx.fillStyle = '#2b2f40'; ctx.beginPath(); ctx.roundRect(o.x, o.y, o.w, o.h, 10); ctx.fill();
+    ctx.fillStyle = '#ff4d6d'; ctx.beginPath(); ctx.arc(o.x + o.w / 2, o.y + o.h / 2, 6, 0, 7); ctx.fill();
+    ctx.strokeStyle = '#9aa3b8'; ctx.lineWidth = 3; const sp = o.t * 0.8;
+    for (const s of [0, 1]) { const cx = o.x + (s ? o.w - 6 : 6); ctx.beginPath(); ctx.moveTo(cx - 12 * Math.cos(sp), o.y - 4); ctx.lineTo(cx + 12 * Math.cos(sp), o.y - 4); ctx.stroke(); }
+  }
+}
+function center(t, y, size, c = '#fff', w = 'bold') { ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = `${w} ${size}px "Malgun Gothic", sans-serif`; ctx.fillStyle = c; ctx.fillText(t, W / 2, y); }
+function draw() {
+  ctx.save();
+  if (shake > 0.5) ctx.translate(rand(-shake, shake), rand(-shake, shake));
+  const sk = ctx.createLinearGradient(0, 0, 0, GROUND); sk.addColorStop(0, '#2b3a8f'); sk.addColorStop(0.55, '#f08a5d'); sk.addColorStop(1, '#ffd29a');
+  ctx.fillStyle = sk; ctx.fillRect(-20, -20, W + 40, H + 40);
+  const sg = ctx.createRadialGradient(560, 240, 10, 560, 240, 120); sg.addColorStop(0, 'rgba(255,240,200,1)'); sg.addColorStop(0.3, 'rgba(255,200,120,.6)'); sg.addColorStop(1, 'rgba(255,160,90,0)');
+  ctx.fillStyle = sg; ctx.fillRect(400, 100, 320, 280);
+  ctx.fillStyle = 'rgba(255,255,255,.7)';
+  for (const c of clouds) { ctx.beginPath(); ctx.ellipse(c.x, c.y, 50 * c.s, 14 * c.s, 0, 0, 7); ctx.ellipse(c.x + 25 * c.s, c.y - 8 * c.s, 30 * c.s, 14 * c.s, 0, 0, 7); ctx.fill(); }
+  hills(scroll * 0.1, 300, 40, 0.004, '#7b4b7a');
+  hills(scroll * 0.3 + 500, 335, 28, 0.007, '#56345e');
+  hills(scroll * 0.55 + 900, 360, 14, 0.012, '#3b2747');
+  // 땅
+  ctx.fillStyle = '#5b3a29'; ctx.fillRect(0, GROUND, W, H - GROUND);
+  ctx.fillStyle = '#7fbf4d'; ctx.fillRect(0, GROUND, W, 10);
+  ctx.fillStyle = '#4a2e20';
+  for (let x = -(scroll % 60); x < W; x += 60) { ctx.fillRect(x, GROUND + 24, 30, 6); ctx.fillRect(x + 30, GROUND + 48, 24, 6); }
+
+  if (state !== 'title') {
+    for (const c of coins) {
+      const sx = Math.abs(Math.cos(c.t));
+      ctx.fillStyle = '#ffd166'; ctx.beginPath(); ctx.ellipse(c.x, c.y, 9 * sx + 1, 9, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = '#fff3c4'; ctx.beginPath(); ctx.ellipse(c.x, c.y, 4 * sx, 5, 0, 0, 7); ctx.fill();
+    }
+    for (const o of obs) obstacle(o);
+    robot(P.x, P.y, P.slide && state === 'play', frame * speed * 0.035);
+  } else robot(150, GROUND, false, frame * 0.25);
+  for (const p of parts) { ctx.globalAlpha = p.life / p.max; ctx.fillStyle = p.c; ctx.fillRect(p.x, p.y, p.s, p.s); }
+  ctx.globalAlpha = 1;
+  for (const p of pops) {
+    ctx.globalAlpha = Math.min(1, p.life / 20);
+    if (p.big) center(p.t, p.y, 34, '#fff'); else { ctx.fillStyle = '#ffd166'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(p.t, p.x, p.y - (30 - p.life)); }
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  if (state !== 'title') {
+    ctx.textBaseline = 'middle'; ctx.textAlign = 'right'; ctx.fillStyle = '#fff'; ctx.font = 'bold 26px sans-serif';
+    ctx.shadowColor = 'rgba(0,0,0,.5)'; ctx.shadowBlur = 6;
+    ctx.fillText(meters().toLocaleString() + ' m', W - 20, 30);
+    ctx.font = 'bold 15px sans-serif'; ctx.fillStyle = '#ffd166'; ctx.fillText('● ' + coinCount, W - 20, 58);
+    ctx.fillStyle = '#fff'; ctx.font = '12px sans-serif'; ctx.fillText('최고 ' + Math.max(best, meters()) + ' m', W - 20, 80);
+    ctx.shadowBlur = 0;
+  }
+  if (state === 'title') {
+    ctx.fillStyle = 'rgba(20,10,30,.45)'; ctx.fillRect(0, 0, W, H);
+    center('JUMP RUNNER', 110, 58, '#ffd166', '900'); center('점프 러너', 158, 20, '#fff6e0', 'normal');
+    ['스페이스 / ↑ : 점프 (공중에서 한 번 더 = 2단 점프, 길게 누르면 높이)', '↓ : 슬라이딩 (공중에서는 빠른 낙하) · P 일시정지', '모바일: 화면 오른쪽 탭 = 점프, 왼쪽 누르기 = 슬라이딩', '코인 1개 = 10m 보너스!'].forEach((t, i) => center(t, 210 + i * 26, 15, '#fff6e0', 'normal'));
+    if (best) center('최고 기록 ' + best + ' m', 330, 16, '#ffd166');
+    if (frame % 60 < 40) center('스페이스 또는 클릭으로 시작', 410, 20, '#fff');
+  } else if (state === 'pause') {
+    ctx.fillStyle = 'rgba(0,0,0,.5)'; ctx.fillRect(0, 0, W, H); center('일시정지', H / 2, 36);
+  } else if (state === 'over') {
+    ctx.fillStyle = 'rgba(20,10,30,.6)'; ctx.fillRect(0, 0, W, H);
+    center('GAME OVER', 130, 50, '#ff6b6b', '900');
+    center(`${meters().toLocaleString()} m · 코인 ${coinCount}개`, 195, 24);
+    center((meters() >= best && meters() > 0 ? '🏆 신기록! ' : '최고 기록 ') + best + ' m', 232, 16, '#ffd166', 'normal');
+    if (frame % 60 < 40) center('스페이스 또는 클릭으로 다시 달리기', 320, 18);
+  }
+}
+
+parts = []; pops = [];
+let last = performance.now(), acc = 0;
+(function loop(now) {
+  acc += Math.min(100, now - last); last = now;
+  while (acc >= 1000 / 60) { update(); acc -= 1000 / 60; }
+  draw(); requestAnimationFrame(loop);
+})(last);
+})();
+</script>
+</body>
+</html>

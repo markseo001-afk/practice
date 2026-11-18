@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>블록 브레이커</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #070912; overflow: hidden; font-family: "Malgun Gothic", system-ui, sans-serif; }
+  #wrap { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  canvas { touch-action: none; border-radius: 10px; box-shadow: 0 0 50px rgba(255,90,190,.25); }
+  .back { position: fixed; left: 12px; top: 10px; z-index: 5; color: #e5e9ff; text-decoration: none; font-size: 14px; background: rgba(255,255,255,.1); padding: 7px 14px; border-radius: 20px; }
+</style>
+</head>
+<body>
+<a class="back" href="../index.html">← 게임 목록</a>
+<div id="wrap"><canvas id="c" width="480" height="720"></canvas></div>
+<script>
+(() => {
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+function fit() { const s = Math.min(innerWidth / W, innerHeight / H) * 0.98; cv.style.width = W * s + 'px'; cv.style.height = H * s + 'px'; }
+addEventListener('resize', fit); fit();
+
+// ---------- 사운드 ----------
+let actx = null;
+function beep(f, d, type = 'square', v = 0.05, slide = 0) {
+  try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return; }
+  const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime;
+  o.type = type; o.frequency.setValueAtTime(f, t); if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, f + slide), t + d);
+  g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+  o.connect(g); g.connect(actx.destination); o.start(); o.stop(t + d);
+}
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+// ---------- 상태 ----------
+const COLS = 10, BW = (W - 40) / COLS, BH = 22, TOP = 100;
+const HP_COL = ['', '#4ee6c8', '#ffb347', '#ff5c8a'];
+const PW = { W: { c: '#7fe8ff', t: '넓은 패들' }, M: { c: '#ffd166', t: '멀티볼' }, S: { c: '#9effa0', t: '슬로우' }, L: { c: '#ff6b9a', t: '라이프 +1' }, F: { c: '#ff7a3a', t: '관통탄' } };
+let state = 'title', level, score, lives, best = 0, combo, paddle, balls, bricks, caps, parts, texts, shake, fireT, slowT, frame = 0;
+try { best = +localStorage.getItem('breaker_best') || 0; } catch (e) {}
+
+function layout(lv) {
+  const out = [], p = (lv - 1) % 6, extra = Math.floor((lv - 1) / 6);
+  for (let r = 0; r < 8; r++) for (let c = 0; c < COLS; c++) {
+    let hp = 0;
+    if (p === 0) hp = r < 6 ? (r < 2 ? 2 : 1) : 0;
+    else if (p === 1) hp = (c >= r && c < COLS - r && r < 5) ? (r === 0 ? 3 : r < 2 ? 2 : 1) : 0;
+    else if (p === 2) hp = r < 7 ? ((r + c) % 2 ? 2 : (r === 3 ? -1 : 1)) : 0;
+    else if (p === 3) { const d = Math.abs(c - 4.5) + Math.abs(r - 3.5); hp = d < 4.5 ? (d < 1.5 ? 3 : d < 3 ? 2 : 1) : 0; }
+    else if (p === 4) hp = r % 2 === 0 ? (c === 0 || c === 9 ? -1 : 1 + (r === 0 ? 2 : 0)) : (c % 3 === 1 ? 2 : 0);
+    else hp = Math.random() < 0.75 && r < 7 ? (Math.random() < 0.1 ? -1 : 1 + (Math.random() * 3 | 0)) : 0;
+    if (hp > 0) hp = Math.min(3, hp + extra);
+    if (hp) out.push({ x: 20 + c * BW + 2, y: TOP + r * (BH + 4), w: BW - 4, h: BH, hp, max: Math.max(1, hp), hit: 0 });
+  }
+  return out;
+}
+const baseSpeed = () => Math.min(11, 6 + level * 0.45);
+function newBall(stuck = true) { return { x: paddle.x, y: paddle.y - 12, vx: 0, vy: 0, r: 7, stuck, trail: [] }; }
+function startGame() { level = 1; score = 0; lives = 3; startLevel(); }
+function startLevel() {
+  paddle = { x: W / 2, y: H - 60, w: 96, tw: 96, h: 14, wideT: 0 };
+  balls = [newBall()]; bricks = layout(level); caps = []; parts = []; texts = []; shake = 0; fireT = 0; slowT = 0; combo = 0;
+  state = 'serve';
+  texts.push({ x: W / 2, y: H / 2, t: `LEVEL ${level}`, life: 90, size: 40, c: '#fff' });
+}
+function launch() {
+  for (const b of balls) if (b.stuck) { const a = rand(-0.5, 0.5) - Math.PI / 2; b.vx = Math.cos(a) * baseSpeed(); b.vy = Math.sin(a) * baseSpeed(); b.stuck = false; }
+  state = 'play'; beep(600, 0.08, 'triangle');
+}
+
+// ---------- 입력 ----------
+const keys = {};
+addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (['ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
+  if (e.code === 'Space' || e.code === 'Enter') action();
+  if (e.code === 'KeyP' && (state === 'play' || state === 'pause')) state = state === 'play' ? 'pause' : 'play';
+});
+addEventListener('keyup', e => keys[e.code] = false);
+function action() {
+  if (state === 'title' || state === 'over') startGame();
+  else if (state === 'serve') launch();
+  else if (state === 'clear' && frame > clearAt + 60) { level++; startLevel(); }
+}
+let clearAt = 0;
+function toX(e) { const r = cv.getBoundingClientRect(); return (e.clientX - r.left) * W / r.width; }
+cv.addEventListener('pointermove', e => { if (paddle) paddle.x = clamp(toX(e), paddle.w / 2, W - paddle.w / 2); });
+cv.addEventListener('pointerdown', e => { cv.setPointerCapture(e.pointerId); if (paddle) paddle.x = clamp(toX(e), paddle.w / 2, W - paddle.w / 2); action(); });
+
+// ---------- 효과 ----------
+function burst(x, y, c, n = 14) { for (let i = 0; i < n; i++) { const a = rand(0, Math.PI * 2), s = rand(1, 5); parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: rand(20, 40), max: 40, c, s: rand(2, 4) }); } }
+function hitBrick(br, b) {
+  if (br.hp < 0) { br.hit = 6; beep(220, 0.05, 'square', 0.03); return; }
+  br.hp -= fireT > 0 ? 3 : 1; br.hit = 6;
+  if (br.hp <= 0) {
+    combo++; const pts = 50 * level * Math.min(8, combo);
+    score += pts; burst(br.x + br.w / 2, br.y + br.h / 2, HP_COL[br.max], 18); shake = 4;
+    if (combo >= 3) texts.push({ x: br.x + br.w / 2, y: br.y, t: `${combo} COMBO`, life: 40, size: 16, c: '#ffd166', vy: -0.8 });
+    beep(500 + Math.min(combo, 12) * 60, 0.08, 'triangle', 0.05);
+    if (Math.random() < 0.16) { const k = 'WMSLF'[Math.random() * 5 | 0]; if (k !== 'L' || Math.random() < 0.5) caps.push({ x: br.x + br.w / 2, y: br.y, k }); }
+  } else { beep(330, 0.05, 'square', 0.03); score += 10; }
+}
+
+// ---------- 업데이트 ----------
+function update() {
+  frame++;
+  for (const p of parts) { p.x += p.vx; p.y += p.vy; p.vy += 0.15; p.life--; }
+  parts = (parts || []).filter(p => p.life > 0);
+  for (const t of texts) { t.life--; t.y += t.vy || 0; }
+  texts = (texts || []).filter(t => t.life > 0);
+  shake *= 0.85;
+  if (state !== 'play' && state !== 'serve') return;
+
+  // 패들
+  const kx = (keys.ArrowRight || keys.KeyD ? 1 : 0) - (keys.ArrowLeft || keys.KeyA ? 1 : 0);
+  paddle.x = clamp(paddle.x + kx * 9, paddle.w / 2, W - paddle.w / 2);
+  if (paddle.wideT > 0 && --paddle.wideT === 0) paddle.tw = 96;
+  paddle.w += (paddle.tw - paddle.w) * 0.15;
+  if (fireT > 0) fireT--; if (slowT > 0) slowT--;
+  for (const br of bricks) if (br.hit > 0) br.hit--;
+
+  // 공
+  for (const b of balls) {
+    if (b.stuck) { b.x = paddle.x; b.y = paddle.y - paddle.h / 2 - b.r; continue; }
+    b.trail.push({ x: b.x, y: b.y }); if (b.trail.length > 10) b.trail.shift();
+    const mul = slowT > 0 ? 0.65 : 1, steps = 4;
+    for (let s = 0; s < steps; s++) {
+      b.x += b.vx * mul / steps; b.y += b.vy * mul / steps;
+      if (b.x < b.r) { b.x = b.r; b.vx = Math.abs(b.vx); beep(250, 0.03, 'sine', 0.03); }
+      if (b.x > W - b.r) { b.x = W - b.r; b.vx = -Math.abs(b.vx); beep(250, 0.03, 'sine', 0.03); }
+      if (b.y < b.r + 50) { b.y = b.r + 50; b.vy = Math.abs(b.vy); beep(250, 0.03, 'sine', 0.03); }
+      // 패들
+      const py = paddle.y - paddle.h / 2;
+      if (b.vy > 0 && b.y + b.r >= py && b.y - b.r <= paddle.y + paddle.h / 2 && Math.abs(b.x - paddle.x) <= paddle.w / 2 + b.r) {
+        const off = clamp((b.x - paddle.x) / (paddle.w / 2), -1, 1), a = -Math.PI / 2 + off * 1.05, sp = Math.min(13, Math.hypot(b.vx, b.vy) * 1.01);
+        b.vx = Math.cos(a) * sp; b.vy = Math.sin(a) * sp; b.y = py - b.r; combo = 0;
+        beep(420, 0.05, 'triangle', 0.05); burst(b.x, py, '#ffffff', 5);
+      }
+      // 벽돌
+      for (const br of bricks) {
+        if (br.hp === 0) continue;
+        const nx = clamp(b.x, br.x, br.x + br.w), ny = clamp(b.y, br.y, br.y + br.h);
+        const dx = b.x - nx, dy = b.y - ny;
+        if (dx * dx + dy * dy <= b.r * b.r) {
+          const pass = fireT > 0 && br.hp > 0;
+          hitBrick(br, b);
+          if (!pass) {
+            const ox = Math.min(b.x + b.r - br.x, br.x + br.w - (b.x - b.r)), oy = Math.min(b.y + b.r - br.y, br.y + br.h - (b.y - b.r));
+            if (ox < oy) { b.vx = b.x < br.x + br.w / 2 ? -Math.abs(b.vx) : Math.abs(b.vx); }
+            else { b.vy = b.y < br.y + br.h / 2 ? -Math.abs(b.vy) : Math.abs(b.vy); }
+            break;
+          }
+        }
+      }
+      if (Math.abs(b.vy) < 1.5) b.vy = b.vy < 0 ? -1.5 : 1.5; // 수평 고착 방지
+    }
+    if (b.y > H + 20) b.dead = true;
+  }
+  bricks = bricks.filter(br => br.hp !== 0);
+  balls = balls.filter(b => !b.dead);
+  if (!balls.length) {
+    lives--; shake = 12; beep(160, 0.5, 'sawtooth', 0.06, -100);
+    if (lives <= 0) { state = 'over'; if (score > best) { best = score; try { localStorage.setItem('breaker_best', best); } catch (e) {} } return; }
+    balls = [newBall()]; state = 'serve'; combo = 0; fireT = 0; slowT = 0;
+  }
+
+  // 아이템 캡슐
+  for (const c of caps) {
+    c.y += 2.6;
+    if (c.y > paddle.y - 14 && c.y < paddle.y + 14 && Math.abs(c.x - paddle.x) < paddle.w / 2 + 16) {
+      c.dead = true; beep(900, 0.12, 'triangle', 0.06, 500);
+      texts.push({ x: c.x, y: paddle.y - 30, t: PW[c.k].t, life: 50, size: 16, c: PW[c.k].c, vy: -0.6 });
+      if (c.k === 'W') { paddle.tw = 160; paddle.wideT = 900; }
+      if (c.k === 'S') slowT = 600;
+      if (c.k === 'F') fireT = 420;
+      if (c.k === 'L') lives = Math.min(6, lives + 1);
+      if (c.k === 'M') { const add = []; for (const b of balls.slice(0, 4)) for (const s of [-0.4, 0.4]) { if (b.stuck) continue; const a = Math.atan2(b.vy, b.vx) + s, sp = Math.hypot(b.vx, b.vy); add.push({ x: b.x, y: b.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, r: 7, stuck: false, trail: [] }); } balls.push(...add); }
+    }
+    if (c.y > H + 20) c.dead = true;
+  }
+  caps = caps.filter(c => !c.dead);
+
+  if (!bricks.some(br => br.hp > 0)) {
+    state = 'clear'; clearAt = frame; const bonus = 1000 * level + lives * 200; score += bonus;
+    texts.push({ x: W / 2, y: H / 2 + 50, t: `보너스 +${bonus}`, life: 9999, size: 20, c: '#ffd166' });
+    [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => beep(f, 0.15, 'triangle', 0.06), i * 110));
+  }
+}
+
+// ---------- 그리기 ----------
+function rr(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y, w, h, r) : ctx.rect(x, y, w, h); }
+function center(t, y, size, c = '#fff', w = 'bold') { ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = `${w} ${size}px "Malgun Gothic", sans-serif`; ctx.fillStyle = c; ctx.fillText(t, W / 2, y); }
+function draw() {
+  ctx.save();
+  if (shake > 0.5) ctx.translate(rand(-shake, shake), rand(-shake, shake));
+  const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#1a0f3a'); g.addColorStop(1, '#0a0b1e');
+  ctx.fillStyle = g; ctx.fillRect(-20, -20, W + 40, H + 40);
+  ctx.strokeStyle = 'rgba(255,255,255,.04)'; ctx.lineWidth = 1;
+  for (let x = 0; x < W; x += 30) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+  for (let y = (frame * 0.5) % 30; y < H; y += 30) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+
+  if (state !== 'title') {
+    // 벽돌
+    for (const br of bricks) {
+      const col = br.hp < 0 ? '#8a90a8' : HP_COL[Math.min(3, br.hp)];
+      ctx.fillStyle = br.hit ? '#ffffff' : col; rr(br.x, br.y, br.w, br.h, 5); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,.3)'; rr(br.x + 3, br.y + 3, br.w - 6, 5, 3); ctx.fill();
+      ctx.fillStyle = 'rgba(0,0,0,.2)'; rr(br.x, br.y + br.h - 5, br.w, 5, 3); ctx.fill();
+      if (br.hp < 0) { ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(br.x + 6, br.y + 6); ctx.lineTo(br.x + br.w - 6, br.y + br.h - 6); ctx.stroke(); }
+    }
+    // 캡슐
+    for (const c of caps) {
+      ctx.fillStyle = PW[c.k].c; rr(c.x - 18, c.y - 9, 36, 18, 9); ctx.fill();
+      ctx.fillStyle = '#111'; ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(c.k, c.x, c.y + 1);
+    }
+    // 패들
+    const pg = ctx.createLinearGradient(0, paddle.y - 7, 0, paddle.y + 7);
+    pg.addColorStop(0, '#ffffff'); pg.addColorStop(1, paddle.wideT ? '#7fe8ff' : '#ff7ac6');
+    ctx.shadowColor = paddle.wideT ? '#7fe8ff' : '#ff7ac6'; ctx.shadowBlur = 18;
+    ctx.fillStyle = pg; rr(paddle.x - paddle.w / 2, paddle.y - paddle.h / 2, paddle.w, paddle.h, 7); ctx.fill();
+    ctx.shadowBlur = 0;
+    // 공
+    for (const b of balls) {
+      const bc = fireT > 0 ? '#ff7a3a' : '#ffffff';
+      b.trail.forEach((t, i) => { ctx.globalAlpha = i / b.trail.length * 0.4; ctx.fillStyle = bc; ctx.beginPath(); ctx.arc(t.x, t.y, b.r * (i / b.trail.length), 0, Math.PI * 2); ctx.fill(); });
+      ctx.globalAlpha = 1; ctx.shadowColor = bc; ctx.shadowBlur = 16; ctx.fillStyle = bc;
+      ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+    }
+  }
+  for (const p of parts) { ctx.globalAlpha = p.life / p.max; ctx.fillStyle = p.c; ctx.fillRect(p.x, p.y, p.s, p.s); }
+  ctx.globalAlpha = 1;
+  for (const t of texts) { ctx.globalAlpha = Math.min(1, t.life / 25); center(t.t, t.y, t.size, t.c); }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  // HUD
+  ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fillRect(0, 0, W, 48);
+  if (state !== 'title') {
+    ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.font = 'bold 18px sans-serif'; ctx.fillStyle = '#fff';
+    ctx.fillText(score.toLocaleString(), 130, 25);
+    ctx.textAlign = 'right'; ctx.fillStyle = '#ff6b9a'; ctx.fillText('♥'.repeat(lives), W - 12, 25);
+    ctx.font = '13px sans-serif'; ctx.fillStyle = '#b9c2ea'; ctx.fillText('LV ' + level, W - 12 - lives * 18 - 10, 25);
+  }
+  if (state === 'title') {
+    center('BLOCK', H / 2 - 140, 58, '#ff7ac6', '900'); center('BREAKER', H / 2 - 82, 58, '#7fe8ff', '900');
+    center('블록 브레이커', H / 2 - 30, 20, '#e5e9ff', 'normal');
+    ['마우스·터치 / ←→ 로 패들 이동', '클릭·스페이스로 공 발사', 'P 일시정지'].forEach((t, i) => center(t, H / 2 + 30 + i * 26, 15, '#b9c2ea', 'normal'));
+    Object.entries(PW).forEach(([k, v], i) => { const x = 60 + i * 90; ctx.fillStyle = v.c; rr(x - 18, H / 2 + 125, 36, 18, 9); ctx.fill(); ctx.fillStyle = '#111'; ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(k, x, H / 2 + 135); ctx.fillStyle = '#b9c2ea'; ctx.font = '11px sans-serif'; ctx.fillText(v.t, x, H / 2 + 158); });
+    if (best) center('최고 기록 ' + best.toLocaleString(), H / 2 + 200, 15, '#ffd166', 'normal');
+    if (frame % 60 < 40) center('클릭 또는 스페이스로 시작', H - 110, 20, '#ffd166');
+  } else if (state === 'serve') {
+    if (frame % 60 < 40) center('클릭 또는 스페이스로 발사', H - 120, 16, '#e5e9ff', 'normal');
+  } else if (state === 'pause') {
+    ctx.fillStyle = 'rgba(0,0,0,.5)'; ctx.fillRect(0, 0, W, H); center('일시정지', H / 2, 36);
+  } else if (state === 'clear') {
+    center(`LEVEL ${level} CLEAR!`, H / 2, 38, '#9effa0');
+    if (frame > clearAt + 60 && frame % 60 < 40) center('클릭하여 다음 레벨', H / 2 + 100, 18);
+  } else if (state === 'over') {
+    ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(0, 0, W, H);
+    center('GAME OVER', H / 2 - 60, 46, '#ff5c8a'); center('점수 ' + score.toLocaleString(), H / 2, 24);
+    center((score >= best ? '🏆 신기록! ' : '최고 기록 ') + best.toLocaleString(), H / 2 + 36, 16, '#ffd166', 'normal');
+    if (frame % 60 < 40) center('클릭하여 다시 시작', H / 2 + 110, 18);
+  }
+}
+
+parts = []; texts = [];
+let last = performance.now(), acc = 0;
+(function loop(now) {
+  acc += Math.min(100, now - last); last = now;
+  while (acc >= 1000 / 60) { update(); acc -= 1000 / 60; }
+  draw(); requestAnimationFrame(loop);
+})(last);
+})();
+</script>
+</body>
+</html>

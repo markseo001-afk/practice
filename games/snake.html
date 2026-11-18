@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>네온 스네이크</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #04100c; overflow: hidden; font-family: "Malgun Gothic", system-ui, sans-serif; }
+  #wrap { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  canvas { touch-action: none; border-radius: 10px; box-shadow: 0 0 50px rgba(61,255,168,.2); }
+  .back { position: fixed; left: 12px; top: 10px; z-index: 5; color: #e5fff3; text-decoration: none; font-size: 14px; background: rgba(255,255,255,.1); padding: 7px 14px; border-radius: 20px; }
+</style>
+</head>
+<body>
+<a class="back" href="../index.html">← 게임 목록</a>
+<div id="wrap"><canvas id="c" width="600" height="680"></canvas></div>
+<script>
+(() => {
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height, N = 24, CELL = 24, OX = (W - N * CELL) / 2, OY = 70;
+function fit() { const s = Math.min(innerWidth / W, innerHeight / H) * 0.98; cv.style.width = W * s + 'px'; cv.style.height = H * s + 'px'; }
+addEventListener('resize', fit); fit();
+
+let actx = null;
+function beep(f, d, type = 'square', v = 0.05, slide = 0) {
+  try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return; }
+  const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime;
+  o.type = type; o.frequency.setValueAtTime(f, t); if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, f + slide), t + d);
+  g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+  o.connect(g); g.connect(actx.destination); o.start(); o.stop(t + d);
+}
+const rand = (a, b) => a + Math.random() * (b - a);
+
+let state = 'title', mode = 0; // 0: 클래식(벽 충돌), 1: 벽 통과
+let snake, prev, dir, queue, food, gold, score, best = 0, eaten, stepMs, acc = 0, parts = [], pops = [], shake = 0, deathT = 0, t0 = 0;
+try { best = +localStorage.getItem('snake_best') || 0; } catch (e) {}
+
+function freeCell() {
+  for (;;) { const p = { x: Math.random() * N | 0, y: Math.random() * N | 0 }; if (!snake.some(s => s.x === p.x && s.y === p.y) && !(food && food.x === p.x && food.y === p.y)) return p; }
+}
+function start(m) {
+  mode = m; state = 'play';
+  snake = [{ x: 8, y: 12 }, { x: 7, y: 12 }, { x: 6, y: 12 }, { x: 5, y: 12 }];
+  prev = snake.map(s => ({ ...s })); dir = { x: 1, y: 0 }; queue = [];
+  food = null; food = freeCell(); gold = null; score = 0; eaten = 0; stepMs = 130; acc = 0; parts = []; pops = [];
+  beep(440, 0.1, 'triangle'); setTimeout(() => beep(660, 0.12, 'triangle'), 90);
+}
+function turn(x, y) {
+  const last = queue.length ? queue[queue.length - 1] : dir;
+  if (last.x === -x && last.y === -y) return; if (last.x === x && last.y === y) return;
+  if (queue.length < 3) queue.push({ x, y });
+}
+
+addEventListener('keydown', e => {
+  const k = e.code;
+  if (k.startsWith('Arrow') || k === 'Space') e.preventDefault();
+  if (state === 'title' || (state === 'over' && performance.now() - deathT > 600)) {
+    if (k === 'Digit1' || k === 'Numpad1') return start(0);
+    if (k === 'Digit2' || k === 'Numpad2') return start(1);
+    if (k === 'Enter' || k === 'Space') return start(mode);
+    return;
+  }
+  if (k === 'KeyP') { state = state === 'pause' ? 'play' : state === 'play' ? 'pause' : state; return; }
+  if (state !== 'play') return;
+  if (k === 'ArrowUp' || k === 'KeyW') turn(0, -1);
+  if (k === 'ArrowDown' || k === 'KeyS') turn(0, 1);
+  if (k === 'ArrowLeft' || k === 'KeyA') turn(-1, 0);
+  if (k === 'ArrowRight' || k === 'KeyD') turn(1, 0);
+});
+let touch = null;
+function local(e) { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) * W / r.width, y: (e.clientY - r.top) * H / r.height }; }
+cv.addEventListener('pointerdown', e => {
+  const p = local(e);
+  if (state === 'title' || (state === 'over' && performance.now() - deathT > 600)) {
+    if (p.y > H / 2 + 40 && p.y < H / 2 + 110) return start(p.x < W / 2 ? 0 : 1);
+    if (state === 'over') return start(mode);
+    return;
+  }
+  touch = p;
+});
+cv.addEventListener('pointerup', e => {
+  if (!touch || state !== 'play') return;
+  const p = local(e), dx = p.x - touch.x, dy = p.y - touch.y; touch = null;
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < 20) return;
+  if (Math.abs(dx) > Math.abs(dy)) turn(Math.sign(dx), 0); else turn(0, Math.sign(dy));
+});
+
+function burst(cx, cy, c, n = 16) { for (let i = 0; i < n; i++) { const a = rand(0, Math.PI * 2), s = rand(1, 4); parts.push({ x: cx, y: cy, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: rand(20, 40), max: 40, c }); } }
+const px = c => OX + c * CELL + CELL / 2, py = c => OY + c * CELL + CELL / 2;
+
+function step() {
+  if (queue.length) dir = queue.shift();
+  prev = snake.map(s => ({ ...s }));
+  let h = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
+  if (mode === 1) { h.x = (h.x + N) % N; h.y = (h.y + N) % N; }
+  const hitWall = h.x < 0 || h.y < 0 || h.x >= N || h.y >= N;
+  const willGrow = (h.x === food.x && h.y === food.y) || (gold && h.x === gold.x && h.y === gold.y);
+  const body = willGrow ? snake : snake.slice(0, -1);
+  if (hitWall || body.some(s => s.x === h.x && s.y === h.y)) return die();
+  snake.unshift(h);
+  if (h.x === food.x && h.y === food.y) {
+    eaten++; const pts = 10 + Math.floor(eaten / 5) * 2; score += pts;
+    burst(px(h.x), py(h.y), '#3dffa8'); pops.push({ x: px(h.x), y: py(h.y), t: '+' + pts, life: 40, c: '#3dffa8' });
+    beep(600 + Math.min(eaten, 30) * 15, 0.08, 'triangle', 0.06);
+    food = freeCell(); stepMs = Math.max(58, stepMs - 2.5);
+    if (eaten % 5 === 0 && !gold) { gold = freeCell(); gold.t = 70; }
+    prev.push({ ...prev[prev.length - 1] });
+  } else if (gold && h.x === gold.x && h.y === gold.y) {
+    score += 50; burst(px(h.x), py(h.y), '#ffd166', 30); shake = 6;
+    pops.push({ x: px(h.x), y: py(h.y), t: '+50 골드!', life: 50, c: '#ffd166' });
+    [880, 1100, 1320].forEach((f, i) => setTimeout(() => beep(f, 0.08, 'triangle', 0.05), i * 60));
+    gold = null; prev.push({ ...prev[prev.length - 1] });
+  } else snake.pop();
+}
+function die() {
+  state = 'over'; deathT = performance.now(); shake = 14;
+  snake.forEach((s, i) => setTimeout(() => burst(px(s.x), py(s.y), i ? '#3dffa8' : '#ffffff', 6), i * 15));
+  beep(200, 0.6, 'sawtooth', 0.07, -150);
+  if (score > best) { best = score; try { localStorage.setItem('snake_best', best); } catch (e) {} }
+}
+
+function center(t, y, size, c = '#fff', w = 'bold') { ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = `${w} ${size}px "Malgun Gothic", sans-serif`; ctx.fillStyle = c; ctx.fillText(t, W / 2, y); }
+function draw(now, frac) {
+  ctx.save();
+  if (shake > 0.5) ctx.translate(rand(-shake, shake), rand(-shake, shake));
+  ctx.fillStyle = '#04100c'; ctx.fillRect(-20, -20, W + 40, H + 40);
+  // 보드
+  ctx.fillStyle = '#061a14'; ctx.fillRect(OX, OY, N * CELL, N * CELL);
+  ctx.fillStyle = 'rgba(61,255,168,.07)';
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if ((x + y) % 2) ctx.fillRect(OX + x * CELL, OY + y * CELL, CELL, CELL);
+  ctx.strokeStyle = mode === 1 ? 'rgba(61,255,168,.35)' : '#3dffa8'; ctx.lineWidth = 2;
+  if (mode === 1) ctx.setLineDash([8, 8]);
+  ctx.strokeRect(OX - 1, OY - 1, N * CELL + 2, N * CELL + 2); ctx.setLineDash([]);
+
+  if (state !== 'title') {
+    // 먹이
+    const pul = 1 + Math.sin(now / 150) * 0.12;
+    ctx.shadowColor = '#ff4d8d'; ctx.shadowBlur = 18; ctx.fillStyle = '#ff4d8d';
+    ctx.beginPath(); ctx.arc(px(food.x), py(food.y), CELL * 0.36 * pul, 0, Math.PI * 2); ctx.fill();
+    if (gold) {
+      ctx.shadowColor = '#ffd166'; ctx.fillStyle = '#ffd166';
+      ctx.save(); ctx.translate(px(gold.x), py(gold.y)); ctx.rotate(now / 300);
+      ctx.beginPath(); for (let i = 0; i < 10; i++) { const r = i % 2 ? 5 : 12, a = i * Math.PI / 5; ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r); } ctx.fill(); ctx.restore();
+      ctx.shadowBlur = 0; ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(px(gold.x), py(gold.y), 15, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * gold.t / 70); ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+    // 뱀 (부드러운 보간)
+    if (state !== 'over' || performance.now() - deathT < 300) {
+      const pts = snake.map((s, i) => {
+        const p = prev[i] || s; let fx = p.x, fy = p.y;
+        if (Math.abs(s.x - p.x) <= 1 && Math.abs(s.y - p.y) <= 1) { fx = p.x + (s.x - p.x) * frac; fy = p.y + (s.y - p.y) * frac; } else { fx = s.x; fy = s.y; }
+        return { x: px(fx), y: py(fy) };
+      });
+      ctx.shadowColor = '#3dffa8'; ctx.shadowBlur = 14; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      for (let i = pts.length - 1; i > 0; i--) {
+        const a = pts[i], b = pts[i - 1];
+        if (Math.hypot(a.x - b.x, a.y - b.y) > CELL * 1.5) continue;
+        const f = 1 - i / pts.length;
+        ctx.strokeStyle = `hsl(${150 - f * 20}, 100%, ${45 + f * 20}%)`; ctx.lineWidth = CELL * (0.55 + f * 0.25);
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      }
+      const hd = pts[0];
+      ctx.fillStyle = '#c8ffe6'; ctx.beginPath(); ctx.arc(hd.x, hd.y, CELL * 0.45, 0, Math.PI * 2); ctx.fill();
+      ctx.shadowBlur = 0;
+      const ex = dir.y, ey = -dir.x;
+      ctx.fillStyle = '#04100c';
+      for (const s of [-1, 1]) { ctx.beginPath(); ctx.arc(hd.x + dir.x * 4 + ex * s * 5, hd.y + dir.y * 4 + ey * s * 5, 2.6, 0, Math.PI * 2); ctx.fill(); }
+    }
+  }
+  for (const p of parts) { ctx.globalAlpha = p.life / p.max; ctx.fillStyle = p.c; ctx.fillRect(p.x - 2, p.y - 2, 4, 4); }
+  ctx.globalAlpha = 1;
+  for (const p of pops) { ctx.globalAlpha = Math.min(1, p.life / 20); ctx.fillStyle = p.c; ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(p.t, p.x, p.y - (40 - p.life)); }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  // HUD
+  ctx.textBaseline = 'middle'; ctx.textAlign = 'right'; ctx.font = 'bold 22px sans-serif'; ctx.fillStyle = '#fff';
+  if (state !== 'title') { ctx.fillText(score.toLocaleString(), W - OX, 36); ctx.font = '13px sans-serif'; ctx.fillStyle = '#9fd9c0'; ctx.fillText(`길이 ${snake.length} · ${mode ? '벽 통과' : '클래식'} · 최고 ${Math.max(best, score)}`, W - OX - 80, 38); }
+
+  const modeBtns = () => {
+    ['1  클래식', '2  벽 통과'].forEach((t, i) => {
+      const x = i ? W / 2 + 20 : W / 2 - 220, y = H / 2 + 45;
+      ctx.fillStyle = i === mode ? 'rgba(61,255,168,.25)' : 'rgba(255,255,255,.08)'; ctx.strokeStyle = '#3dffa8'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y, 200, 60, 12) : ctx.rect(x, y, 200, 60); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 20px "Malgun Gothic", sans-serif'; ctx.textAlign = 'center'; ctx.fillText(t, x + 100, y + 31);
+    });
+  };
+  if (state === 'title') {
+    ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(0, 0, W, H);
+    ctx.shadowColor = '#3dffa8'; ctx.shadowBlur = 30; center('NEON SNAKE', H / 2 - 120, 60, '#3dffa8', '900'); ctx.shadowBlur = 0;
+    center('네온 스네이크', H / 2 - 70, 20, '#e5fff3', 'normal');
+    center('방향키 / WASD / 스와이프로 이동 · P 일시정지', H / 2 - 20, 15, '#9fd9c0', 'normal');
+    modeBtns();
+    center('★ 5개 먹을 때마다 황금 먹이가 잠깐 나타나요 (+50)', H / 2 + 150, 14, '#ffd166', 'normal');
+    if (best) center('최고 기록 ' + best, H / 2 + 180, 15, '#ffd166', 'normal');
+  } else if (state === 'pause') {
+    ctx.fillStyle = 'rgba(0,0,0,.5)'; ctx.fillRect(0, 0, W, H); center('일시정지', H / 2, 36);
+  } else if (state === 'over' && performance.now() - deathT > 500) {
+    ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(0, 0, W, H);
+    center('GAME OVER', H / 2 - 110, 50, '#ff4d8d', '900');
+    center(`점수 ${score} · 길이 ${snake.length}`, H / 2 - 50, 22);
+    center((score >= best && score > 0 ? '🏆 신기록! ' : '최고 기록 ') + best, H / 2 - 15, 16, '#ffd166', 'normal');
+    modeBtns();
+    center('모드를 눌러 다시 시작 (Enter = 같은 모드)', H / 2 + 140, 14, '#9fd9c0', 'normal');
+  }
+}
+
+let last = performance.now();
+(function loop(now) {
+  const dt = Math.min(100, now - last); last = now;
+  if (state === 'play') {
+    acc += dt;
+    while (acc >= stepMs && state === 'play') { acc -= stepMs; step(); if (gold && --gold.t <= 0) gold = null; }
+  }
+  for (const p of parts) { p.x += p.vx; p.y += p.vy; p.vx *= 0.95; p.vy *= 0.95; p.life--; }
+  parts = parts.filter(p => p.life > 0);
+  for (const p of pops) p.life--; pops = pops.filter(p => p.life > 0);
+  shake *= 0.85;
+  draw(now, state === 'play' ? Math.min(1, acc / stepMs) : 1);
+  requestAnimationFrame(loop);
+})(last);
+})();
+</script>
+</body>
+</html>
