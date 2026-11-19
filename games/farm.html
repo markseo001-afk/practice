@@ -1,0 +1,529 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>햇살 농장</title>
+<style>
+  :root { --bg: #0a120b; --panel: #142316; --panel2: #1d3321; --text: #eef7e8; --muted: #9fb89a; --accent: #b6f06b; --gold: #ffd166;
+          --grass: #3f7d34; --grass2: #4a8c3c; --soil: #7a5232; --soil2: #6a4629; --wet: #4a3020; --wet2: #3d271a; --danger: #ff8a8a; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body { background: radial-gradient(ellipse at 50% 0%, #1f4a24 0%, transparent 60%), var(--bg); color: var(--text);
+         font-family: "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif; overflow-x: hidden; }
+  .back { position: fixed; left: 12px; top: 10px; z-index: 5; color: #e5e9ff; text-decoration: none; font-size: 14px; background: rgba(255,255,255,.1); padding: 7px 14px; border-radius: 20px; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 54px 16px 40px; }
+  .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  h1 { margin: 0; font-size: 26px; font-weight: 900; background: linear-gradient(90deg, #b6f06b, #ffd166); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .icons { display: flex; gap: 6px; }
+  .icon-btn { background: var(--panel2); border: none; color: var(--text); font-size: 18px; width: 38px; height: 38px; border-radius: 10px; cursor: pointer; }
+  .hud { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 12px 0 10px; }
+  .stat { background: var(--panel); border-radius: 12px; padding: 8px 10px; font-size: 12px; color: var(--muted); min-width: 0; }
+  .stat b { display: block; font-size: 18px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stat b.ok { color: var(--accent); }
+  @media (max-width: 520px) { .hud { grid-template-columns: repeat(2, 1fr); } }
+  .sky { position: relative; height: 42px; border-radius: 12px; overflow: hidden; background: var(--sky, #8fd0ff); }
+  .sun { position: absolute; top: 50%; transform: translate(-50%, -50%); font-size: 24px; }
+  .clock { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font-size: 13px; font-weight: 800; color: #10210f; background: rgba(255,255,255,.7); padding: 3px 10px; border-radius: 20px; }
+  .badges { position: absolute; right: 96px; top: 50%; transform: translateY(-50%); display: flex; gap: 6px; font-size: 12px; font-weight: 800; }
+  .badges span { background: rgba(0,0,0,.45); color: #fff; padding: 3px 8px; border-radius: 20px; }
+  .field { position: relative; margin-top: 10px; padding: 10px; background: #2c5a25; border-radius: 16px; border: 4px solid #5b3a1f; box-shadow: inset 0 0 24px rgba(0,0,0,.35); }
+  .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; touch-action: none; user-select: none; -webkit-user-select: none; }
+  .tile { position: relative; aspect-ratio: 1; border-radius: 10px; display: flex; align-items: center; justify-content: center;
+          font-size: min(7vw, 36px); cursor: pointer; transition: background .3s, box-shadow .3s; }
+  .tile:hover { outline: 2px solid rgba(255,255,255,.55); outline-offset: -2px; }
+  .grass { background: repeating-linear-gradient(45deg, var(--grass) 0 6px, var(--grass2) 6px 12px); }
+  .tilled { background: repeating-linear-gradient(0deg, var(--soil) 0 7px, var(--soil2) 7px 9px); }
+  .tilled.wet { background: repeating-linear-gradient(0deg, var(--wet) 0 7px, var(--wet2) 7px 9px); }
+  .tile .m { line-height: 1; transition: font-size .3s; }
+  .s0 .m { font-size: .45em; } .s1 .m { font-size: .7em; } .s2 .m { font-size: .9em; }
+  .ripe { box-shadow: inset 0 0 0 3px var(--gold), 0 0 14px rgba(255,209,102,.55); }
+  .ripe .m { animation: bob 1s ease-in-out infinite; }
+  .dead .m { filter: grayscale(.4); }
+  .spr .m { animation: spin 2s linear infinite; }
+  .bar { position: absolute; left: 12%; right: 12%; bottom: 8%; height: 5px; background: rgba(0,0,0,.5); border-radius: 3px; overflow: hidden; }
+  .bar b { display: block; height: 100%; background: var(--accent); }
+  .th { position: absolute; top: 3px; right: 4px; font-size: .38em; animation: blink 1s infinite; }
+  .crow { position: absolute; top: -4px; left: 0; font-size: .65em; animation: flap .25s infinite alternate; }
+  .field.raining::after { content: ""; position: absolute; inset: 0; border-radius: 12px; pointer-events: none;
+          background: repeating-linear-gradient(105deg, transparent 0 9px, rgba(170,210,255,.35) 9px 10px); background-size: 60px 60px; animation: rain .35s linear infinite; }
+  .fx { position: fixed; pointer-events: none; font-weight: 900; font-size: 17px; z-index: 15; text-shadow: 0 2px 4px #000; transform: translate(-50%, -50%); animation: rise .9s ease-out forwards; white-space: nowrap; }
+  @keyframes rise { to { transform: translate(-50%, -190%); opacity: 0; } }
+  @keyframes bob { 50% { transform: translateY(-8%) scale(1.06); } }
+  @keyframes blink { 50% { opacity: .2; } }
+  @keyframes flap { to { transform: translateY(-3px) rotate(-8deg); } }
+  @keyframes spin { 50% { transform: scale(1.12); } }
+  @keyframes rain { to { background-position: -12px 60px; } }
+  .panel { background: var(--panel); border-radius: 14px; padding: 10px; margin-top: 10px; }
+  .panel h3 { margin: 0 0 8px; font-size: 13px; color: var(--muted); font-weight: 700; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .btn { background: var(--panel2); color: var(--text); border: 2px solid transparent; border-radius: 10px; padding: 7px 10px; font: inherit; font-size: 14px;
+         cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+  .btn.on { border-color: var(--accent); background: #26421f; }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn small { color: var(--muted); font-size: 11px; }
+  .key { font-size: 10px; color: var(--muted); border: 1px solid #3a5a35; border-radius: 4px; padding: 0 4px; }
+  @media (max-width: 520px) { .key { display: none; } .btn { font-size: 13px; padding: 6px 8px; } }
+  .toast { position: fixed; left: 50%; top: 14px; transform: translate(-50%, -20px); opacity: 0; transition: .3s; pointer-events: none; z-index: 20;
+           background: rgba(10,22,10,.94); border: 1px solid var(--accent); padding: 10px 16px; border-radius: 12px; max-width: calc(100% - 32px); text-align: center; font-weight: 700; font-size: 14px; }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.68); display: none; align-items: center; justify-content: center; z-index: 30; padding: 16px; }
+  .overlay.show { display: flex; }
+  .card { background: var(--panel); border: 1px solid #2f4d2a; border-radius: 18px; padding: 22px; max-width: 420px; width: 100%; text-align: center; max-height: calc(100vh - 32px); overflow-y: auto; overflow-x: hidden; }
+  .card h2 { margin: 0 0 10px; font-size: 26px; }
+  .card p, .card li { color: var(--muted); font-size: 14px; line-height: 1.6; }
+  .card ul { text-align: left; padding-left: 20px; margin: 10px 0 16px; }
+  .card .big { font-size: 34px; font-weight: 900; color: var(--gold); margin: 6px 0; }
+  .primary { background: var(--accent); color: #132010; border: none; padding: 12px 22px; border-radius: 12px; font: inherit; font-weight: 800; font-size: 16px; cursor: pointer; margin: 6px; }
+  .secondary { background: var(--panel2); color: var(--text); border: none; padding: 12px 22px; border-radius: 12px; font: inherit; font-weight: 700; font-size: 16px; cursor: pointer; margin: 6px; }
+  .tip { text-align: center; color: var(--muted); font-size: 12px; margin-top: 12px; }
+</style>
+</head>
+<body>
+<a class="back" href="../index.html">← 게임 목록</a>
+<div class="wrap">
+  <div class="top">
+    <h1>🌾 햇살 농장</h1>
+    <div class="icons">
+      <button class="icon-btn" id="muteBtn" title="소리 켜기/끄기">🔊</button>
+      <button class="icon-btn" id="pauseBtn" title="일시정지 (P)">⏸</button>
+    </div>
+  </div>
+
+  <div class="hud">
+    <div class="stat">💰 코인<b id="coins">0</b></div>
+    <div class="stat">📅 날짜<b id="day">1일차</b></div>
+    <div class="stat">🎯 오늘 수익 / 목표<b id="goal">0 / 0</b></div>
+    <div class="stat">❤️ 기회 · ⭐ 누적<b id="lives">❤️❤️❤️</b></div>
+  </div>
+
+  <div class="sky" id="sky">
+    <div class="badges" id="badges"></div>
+    <div class="sun" id="sun">☀️</div>
+    <div class="clock" id="clock">90초</div>
+  </div>
+
+  <div class="field" id="field"><div class="grid" id="grid"></div></div>
+
+  <div class="panel">
+    <h3>도구 — 익은 작물·시든 작물·까마귀는 아무 도구로나 클릭하면 처리돼요</h3>
+    <div class="row" id="tools"></div>
+  </div>
+  <div class="panel">
+    <h3>씨앗 가게 (가격 → 판매가 · 성장 시간)</h3>
+    <div class="row" id="seeds"></div>
+  </div>
+  <div class="panel">
+    <h3>업그레이드</h3>
+    <div class="row" id="upgrades"></div>
+  </div>
+  <p class="tip">드래그하면 여러 칸에 한 번에 쓸 수 있어요 · 단축키 1~5 도구 · P 일시정지</p>
+</div>
+
+<div class="toast" id="toast"></div>
+<div class="overlay" id="overlay"><div class="card" id="card"></div></div>
+
+<script>
+const CROPS = {
+  carrot:     { name: '당근',   icon: '🥕', cost: 10, grow: 12, price: 18,  unlock: 1 },
+  lettuce:    { name: '상추',   icon: '🥬', cost: 15, grow: 18, price: 30,  unlock: 1 },
+  tomato:     { name: '토마토', icon: '🍅', cost: 30, grow: 30, price: 65,  unlock: 2 },
+  corn:       { name: '옥수수', icon: '🌽', cost: 50, grow: 45, price: 115, unlock: 3 },
+  strawberry: { name: '딸기',   icon: '🍓', cost: 80, grow: 60, price: 200, unlock: 4 },
+};
+const TOOLS = [
+  { id: 'hoe',       icon: '🪓', name: '괭이',     key: '1' },
+  { id: 'seed',      icon: '🌱', name: '씨앗',     key: '2' },
+  { id: 'water',     icon: '💧', name: '물뿌리개', key: '3' },
+  { id: 'harvest',   icon: '✋', name: '수확',     key: '4' },
+  { id: 'sprinkler', icon: '🚿', name: '스프링클러 설치', key: '5' },
+];
+const COLS = 6, START_ROWS = 4, MAX_ROWS = 6;
+const DAY_LEN = 90, WATER_LAST = 25, WITHER_AFTER = 45, CROW_TIME = 6, LIVES = 3;
+const EXPAND_COST = [120, 260], BIGCAN_COST = 200, SPR_COST = 150, SPR_MAX = 4;
+const SAVE_KEY = 'farm_save', BEST_KEY = 'farm_best';
+const target = d => Math.round(60 * Math.pow(1.3, d - 1) / 5) * 5;
+
+const $ = id => document.getElementById(id);
+const newTile = () => ({ tilled: false, crop: null, growth: 0, water: 0, ripeFor: 0, withered: false, sprinkler: false, crow: 0 });
+function newState() {
+  return { coins: 50, day: 1, time: 0, today: 0, total: 0, misses: 0, rows: START_ROWS, bigCan: false, sprStock: 0,
+           tool: 'hoe', seed: 'carrot', rain: 0, bumper: 0, nextEvent: 25, tiles: Array.from({ length: START_ROWS * COLS }, newTile) };
+}
+let S = newState();
+let running = false, gameOver = false, started = false;
+
+// ---------- storage ----------
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+  del(k) { try { localStorage.removeItem(k); } catch (e) {} },
+};
+const getBest = () => +store.get(BEST_KEY) || 0;
+function save() { if (started && !gameOver) store.set(SAVE_KEY, JSON.stringify(S)); }
+function loadSave() {
+  try {
+    const d = JSON.parse(store.get(SAVE_KEY));
+    if (!d || !Array.isArray(d.tiles) || d.tiles.length !== d.rows * COLS || typeof d.coins !== 'number') return null;
+    d.tiles = d.tiles.map(t => Object.assign(newTile(), t));
+    return Object.assign(newState(), d);
+  } catch (e) { return null; }
+}
+function updateBest() { if (S.total > getBest()) store.set(BEST_KEY, S.total); }
+
+// ---------- audio ----------
+let ac = null, muted = store.get('farm_muted') === '1';
+function snd(f, d = .08, type = 'square', vol = .04, slide = 0) {
+  if (muted) return;
+  try {
+    ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+    const o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime;
+    o.type = type; o.frequency.setValueAtTime(f, t);
+    if (slide) o.frequency.exponentialRampToValueAtTime(f * slide, t + d);
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(.0001, t + d);
+    o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t + d + .02);
+  } catch (e) {}
+}
+const sfx = {
+  hoe:  () => snd(140, .07, 'square', .05, .6),
+  seed: () => snd(620, .06, 'triangle', .06, 1.4),
+  water:() => snd(900, .12, 'sine', .05, .5),
+  coin: () => { snd(880, .07, 'square', .04); setTimeout(() => snd(1320, .1, 'square', .04), 60); },
+  shoo: () => snd(500, .15, 'sawtooth', .04, 2),
+  bad:  () => snd(220, .25, 'sawtooth', .05, .5),
+  place:() => snd(330, .12, 'triangle', .07, 2),
+};
+
+// ---------- UI helpers ----------
+let toastTimer = 0;
+function toast(msg, ms = 2200) {
+  const el = $('toast'); el.textContent = msg; el.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), ms);
+}
+let tileEls = [];
+function fx(i, text, color) {
+  const el = tileEls[i]; if (!el) return;
+  const r = el.getBoundingClientRect(), d = document.createElement('div');
+  d.className = 'fx'; d.textContent = text; d.style.color = color;
+  d.style.left = (r.left + r.width / 2) + 'px'; d.style.top = (r.top + r.height / 3) + 'px';
+  document.body.appendChild(d); setTimeout(() => d.remove(), 950);
+}
+function buildGrid() {
+  const g = $('grid'); g.innerHTML = ''; tileEls = [];
+  for (let i = 0; i < S.tiles.length; i++) {
+    const el = document.createElement('div'); el.className = 'tile'; el.dataset.i = i; el._key = '';
+    g.appendChild(el); tileEls.push(el);
+  }
+}
+function neighbors(i, self) {
+  const r = Math.floor(i / COLS), c = i % COLS, out = [];
+  for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+    if (!self && !dr && !dc) continue;
+    const rr = r + dr, cc = c + dc;
+    if (rr >= 0 && rr < S.rows && cc >= 0 && cc < COLS) out.push(rr * COLS + cc);
+  }
+  return out;
+}
+
+// ---------- actions ----------
+let stroke = null; // { seen:Set, hinted:bool }
+function hint(msg) { if (stroke && stroke.hinted) return; if (stroke) stroke.hinted = true; toast(msg, 1600); }
+function apply(i) {
+  const t = S.tiles[i]; if (!t || !running) return;
+  if (t.crow > 0) { t.crow = 0; sfx.shoo(); fx(i, '훠이!', '#ffffff'); return; }
+  if (t.withered) { Object.assign(t, { crop: null, growth: 0, ripeFor: 0, withered: false }); sfx.hoe(); fx(i, '정리', '#c9d6c4'); return; }
+  if (t.crop && t.growth >= CROPS[t.crop].grow) { harvest(i); return; }
+  switch (S.tool) {
+    case 'hoe':
+      if (!t.tilled && !t.sprinkler) { t.tilled = true; sfx.hoe(); }
+      break;
+    case 'seed': {
+      if (t.sprinkler || t.crop) break;
+      if (!t.tilled) { hint('먼저 🪓 괭이로 땅을 갈아주세요'); break; }
+      const c = CROPS[S.seed];
+      if (S.day < c.unlock) break;
+      if (S.coins < c.cost) { hint('코인이 부족해요 💸'); break; }
+      S.coins -= c.cost; Object.assign(t, { crop: S.seed, growth: 0, ripeFor: 0 });
+      sfx.seed(); fx(i, '-' + c.cost, '#ffb4b4');
+      break;
+    }
+    case 'water': {
+      let any = false;
+      for (const j of (S.bigCan ? neighbors(i, true) : [i])) {
+        const tt = S.tiles[j];
+        if (tt.tilled && !tt.sprinkler) { tt.water = WATER_LAST; any = true; }
+      }
+      if (any) sfx.water(); else hint('갈아 둔 땅에만 물을 줄 수 있어요');
+      break;
+    }
+    case 'harvest':
+      if (t.crop) hint('아직 덜 자랐어요 🌱');
+      break;
+    case 'sprinkler':
+      if (S.sprStock <= 0 || t.sprinkler) break;
+      if (t.crop) { hint('작물이 없는 칸에 설치하세요'); break; }
+      Object.assign(t, { sprinkler: true, tilled: true, water: 0 });
+      S.sprStock--; sfx.place(); fx(i, '설치!', '#9fe0ff');
+      if (!S.sprStock) S.tool = 'water';
+      break;
+  }
+}
+function harvest(i) {
+  const t = S.tiles[i], c = CROPS[t.crop];
+  const price = Math.round(c.price * (S.bumper > 0 ? 1.5 : 1));
+  S.coins += price; S.today += price; S.total += price;
+  Object.assign(t, { crop: null, growth: 0, ripeFor: 0 });
+  sfx.coin(); fx(i, c.icon + ' +' + price, '#ffe066');
+}
+function buy(kind) {
+  if (kind === 'expand') {
+    const idx = S.rows - START_ROWS, cost = EXPAND_COST[idx];
+    if (S.rows >= MAX_ROWS || S.coins < cost) return;
+    S.coins -= cost; S.rows++;
+    for (let k = 0; k < COLS; k++) S.tiles.push(newTile());
+    buildGrid(); toast('🚜 밭이 넓어졌어요!');
+  } else if (kind === 'bigcan') {
+    if (S.bigCan || S.coins < BIGCAN_COST) return;
+    S.coins -= BIGCAN_COST; S.bigCan = true; toast('💧 큰 물뿌리개! 이제 3×3 범위에 물을 줘요');
+  } else if (kind === 'spr') {
+    const placed = S.tiles.filter(t => t.sprinkler).length;
+    if (placed + S.sprStock >= SPR_MAX || S.coins < SPR_COST) return;
+    S.coins -= SPR_COST; S.sprStock++; S.tool = 'sprinkler'; toast('🚿 스프링클러 구매! 설치할 칸을 클릭하세요 (주변 8칸 자동 물주기)');
+  }
+  sfx.place(); save();
+}
+
+// ---------- events ----------
+function triggerEvent() {
+  S.nextEvent = 18 + Math.random() * 16;
+  const planted = S.tiles.map((t, i) => (t.crop && !t.withered && !t.crow) ? i : -1).filter(i => i >= 0);
+  const r = Math.random();
+  if (r < .35) {
+    S.rain = 6; for (const t of S.tiles) if (t.tilled && !t.sprinkler) t.water = WATER_LAST;
+    toast('🌧️ 비가 내려요! 밭 전체에 물이 공급됐어요'); snd(400, .3, 'sine', .03, .5);
+  } else if (r < .75 && planted.length) {
+    const n = Math.min(planted.length, 1 + Math.floor(S.day / 4));
+    for (let k = 0; k < n; k++) {
+      const pick = planted.splice(Math.floor(Math.random() * planted.length), 1)[0];
+      S.tiles[pick].crow = CROW_TIME;
+    }
+    toast('🐦 까마귀가 나타났어요! 빨리 클릭해서 쫓아내세요'); sfx.bad();
+  } else {
+    S.bumper = 15; toast('☀️ 풍작 시세! 15초 동안 판매가 1.5배'); sfx.coin();
+  }
+}
+
+// ---------- update ----------
+let saveTimer = 0;
+function update(dt) {
+  S.time += dt;
+  for (let i = 0; i < S.tiles.length; i++) {
+    if (!S.tiles[i].sprinkler) continue;
+    for (const j of neighbors(i, false)) { const n = S.tiles[j]; if (n.tilled && !n.sprinkler) n.water = WATER_LAST; }
+  }
+  for (let i = 0; i < S.tiles.length; i++) {
+    const t = S.tiles[i];
+    if (t.water > 0) t.water = Math.max(0, t.water - dt);
+    if (!t.crop || t.withered) continue;
+    if (t.crow > 0) {
+      t.crow -= dt;
+      if (t.crow <= 0) { const c = CROPS[t.crop]; Object.assign(t, { crow: 0, crop: null, growth: 0, ripeFor: 0 }); fx(i, c.icon + ' 냠!', '#ff8a8a'); sfx.bad(); }
+      continue;
+    }
+    const c = CROPS[t.crop];
+    if (t.growth < c.grow) { if (t.water > 0) t.growth = Math.min(c.grow, t.growth + dt); }
+    else if ((t.ripeFor += dt) >= WITHER_AFTER) { t.withered = true; fx(i, '시들었어요', '#c9a0a0'); }
+  }
+  if (S.rain > 0) S.rain -= dt;
+  if (S.bumper > 0) S.bumper -= dt;
+  if ((S.nextEvent -= dt) <= 0) triggerEvent();
+  if ((saveTimer += dt) > 5) { saveTimer = 0; save(); }
+  if (S.time >= DAY_LEN) endDay();
+}
+
+// ---------- day flow ----------
+function showCard(html, binds) {
+  $('card').innerHTML = html; $('overlay').classList.add('show');
+  for (const [id, fn] of Object.entries(binds)) { const b = $(id); if (b) b.onclick = fn; }
+}
+function hideCard() { $('overlay').classList.remove('show'); }
+function endDay() {
+  running = false; S.time = DAY_LEN;
+  const goal = target(S.day), pass = S.today >= goal;
+  if (!pass) S.misses++;
+  updateBest();
+  if (S.misses >= LIVES) { finish(); return; }
+  save();
+  const hearts = '❤️'.repeat(LIVES - S.misses) + '🖤'.repeat(S.misses);
+  showCard(`<h2>🌙 ${S.day}일차 끝!</h2>
+    <p>오늘 수익</p><div class="big">${S.today.toLocaleString()} 코인</div>
+    <p>목표 ${goal.toLocaleString()} 코인 — ${pass ? '<b style="color:var(--accent)">달성! 🎉</b>' : '<b style="color:var(--danger)">미달 😢</b>'}</p>
+    <p>남은 기회 ${hearts}<br>내일 목표: <b style="color:var(--text)">${target(S.day + 1).toLocaleString()} 코인</b></p>
+    <button class="primary" id="nextBtn">다음 날 ▶</button>`, { nextBtn: nextDay });
+  if (pass) sfx.coin(); else sfx.bad();
+}
+function nextDay() {
+  S.day++; S.time = 0; S.today = 0;
+  const unlocked = Object.values(CROPS).filter(c => c.unlock === S.day);
+  const hasCrops = S.tiles.some(t => t.crop && !t.withered);
+  if (S.coins < 10 && !hasCrops) { S.coins += 30; toast('🏦 농협 지원금 30코인을 받았어요!', 3000); }
+  else if (unlocked.length) toast(`🎁 새 씨앗 해금: ${unlocked.map(c => c.icon + ' ' + c.name).join(', ')}`, 3000);
+  save(); hideCard(); running = true;
+}
+function finish() {
+  gameOver = true; running = false; store.del(SAVE_KEY);
+  const best = getBest();
+  showCard(`<h2>🌾 농장 문을 닫았어요</h2>
+    <p>${S.day}일 동안 농사를 지었어요</p>
+    <p>누적 수익</p><div class="big">${S.total.toLocaleString()} 코인</div>
+    <p>${S.total >= best ? '🏆 최고 기록 달성!' : '최고 기록 ' + best.toLocaleString() + ' 코인'}</p>
+    <button class="primary" id="againBtn">다시 시작</button>`, { againBtn: () => startGame(newState()) });
+  sfx.bad();
+}
+function startGame(state) {
+  S = state; gameOver = false; started = true; buildGrid(); hideCard(); running = true; last = performance.now(); save();
+  if (S.day === 1 && S.time === 0) toast('🪓 괭이로 땅을 갈고 씨앗을 심어보세요!', 3000);
+}
+function pause() {
+  if (!running) return;
+  running = false; save();
+  showCard(`<h2>⏸ 일시정지</h2><p>${S.day}일차 · 남은 시간 ${Math.ceil(DAY_LEN - S.time)}초</p>
+    <button class="primary" id="resumeBtn">계속하기</button>`, { resumeBtn: resume });
+}
+function resume() { hideCard(); running = true; last = performance.now(); }
+function showStart() {
+  const saved = loadSave(), best = getBest();
+  showCard(`<h2>🌾 햇살 농장</h2>
+    <p>밭을 갈고, 씨앗을 심고, 물을 주고, 수확해서 팔아 매일 목표 수익을 달성하세요!</p>
+    <ul>
+      <li>🪓 갈기 → 🌱 심기 → 💧 물주기 → ✋ 수확</li>
+      <li>물이 마르면 성장이 멈춰요 (💧 깜빡임 표시)</li>
+      <li>익은 작물을 오래 두면 🥀 시들어요</li>
+      <li>하루는 ${DAY_LEN}초. 목표 미달 ${LIVES}번이면 게임 오버</li>
+      <li>🐦 까마귀는 클릭해서 쫓아내세요</li>
+    </ul>
+    ${best ? `<p>🏆 최고 기록 ${best.toLocaleString()} 코인</p>` : ''}
+    ${saved ? `<button class="primary" id="contBtn">이어하기 (${saved.day}일차)</button><button class="secondary" id="newBtn">새 게임</button>`
+            : `<button class="primary" id="newBtn">농사 시작 ▶</button>`}`,
+    { contBtn: () => startGame(saved), newBtn: () => startGame(newState()) });
+}
+
+// ---------- render ----------
+function lerpColor(a, b, t) {
+  const pa = a.match(/\w\w/g).map(h => parseInt(h, 16)), pb = b.match(/\w\w/g).map(h => parseInt(h, 16));
+  return 'rgb(' + pa.map((v, k) => Math.round(v + (pb[k] - v) * t)).join(',') + ')';
+}
+const SKY = [[0, '9ad8ff'], [.55, '6fb8ff'], [.82, 'ff9e5e'], [1, '4b2f6b']];
+function skyColor(f) {
+  for (let k = 1; k < SKY.length; k++) if (f <= SKY[k][0]) {
+    const [f0, c0] = SKY[k - 1], [f1, c1] = SKY[k];
+    return lerpColor(c0, c1, (f - f0) / (f1 - f0));
+  }
+  return '#' + SKY[SKY.length - 1][1];
+}
+function tileHTML(t) {
+  let cls = 'tile', main = '', prog = -1, extra = '';
+  if (t.sprinkler) { cls += ' tilled spr'; main = '🚿'; }
+  else if (!t.tilled) cls += ' grass';
+  else {
+    cls += ' tilled'; if (t.water > 0) cls += ' wet';
+    if (t.withered) { cls += ' dead'; main = '🥀'; }
+    else if (t.crop) {
+      const c = CROPS[t.crop], f = t.growth / c.grow;
+      if (f >= 1) { cls += ' ripe'; main = c.icon; }
+      else {
+        prog = f; main = f < .34 ? '🌱' : f < .67 ? '🌱' : '🌿';
+        cls += f < .34 ? ' s0' : f < .67 ? ' s1' : ' s2';
+        if (t.water <= 0) extra += '<span class="th">💧</span>';
+      }
+    }
+  }
+  if (t.crow > 0) extra += '<span class="crow">🐦</span>';
+  const key = cls + main + extra + (prog >= 0 ? Math.floor(prog * 25) : '');
+  return { cls, key, html: `<span class="m">${main}</span>${prog >= 0 ? `<i class="bar"><b style="width:${(prog * 100).toFixed(0)}%"></b></i>` : ''}${extra}` };
+}
+let uiKey = '';
+function render() {
+  for (let i = 0; i < tileEls.length; i++) {
+    const v = tileHTML(S.tiles[i]), el = tileEls[i];
+    if (el._key !== v.key) { el._key = v.key; el.className = v.cls; el.innerHTML = v.html; }
+  }
+  const f = Math.min(1, S.time / DAY_LEN), goal = target(S.day);
+  $('coins').textContent = S.coins.toLocaleString();
+  $('day').textContent = S.day + '일차';
+  $('goal').textContent = S.today.toLocaleString() + ' / ' + goal.toLocaleString();
+  $('goal').className = S.today >= goal ? 'ok' : '';
+  $('lives').textContent = '❤️'.repeat(Math.max(0, LIVES - S.misses)) + ' ⭐' + S.total.toLocaleString();
+  $('sky').style.setProperty('--sky', skyColor(f));
+  $('sun').style.left = (6 + f * 82) + '%';
+  $('sun').textContent = f > .88 ? '🌙' : '☀️';
+  $('clock').textContent = '⏰ ' + Math.max(0, Math.ceil(DAY_LEN - S.time)) + '초';
+  $('field').classList.toggle('raining', S.rain > 0);
+  let b = '';
+  if (S.rain > 0) b += '<span>🌧️ 비</span>';
+  if (S.bumper > 0) b += `<span>☀️ 1.5배 ${Math.ceil(S.bumper)}초</span>`;
+  $('badges').innerHTML = b;
+  renderPanels();
+}
+function renderPanels() {
+  const placed = S.tiles.filter(t => t.sprinkler).length;
+  const key = [S.tool, S.seed, S.coins, S.day, S.rows, S.bigCan, S.sprStock, placed].join('|');
+  if (key === uiKey) return; uiKey = key;
+  $('tools').innerHTML = TOOLS.filter(t => t.id !== 'sprinkler' || S.sprStock > 0).map(t =>
+    `<button class="btn ${S.tool === t.id ? 'on' : ''}" data-tool="${t.id}">${t.icon} ${t.name}${t.id === 'sprinkler' ? ' ×' + S.sprStock : ''}${t.id === 'water' && S.bigCan ? ' (3×3)' : ''} <span class="key">${t.key}</span></button>`).join('');
+  $('seeds').innerHTML = Object.entries(CROPS).map(([id, c]) => {
+    const locked = S.day < c.unlock;
+    return `<button class="btn ${S.tool === 'seed' && S.seed === id ? 'on' : ''}" data-seed="${id}" ${locked || S.coins < c.cost ? 'disabled' : ''}>
+      ${locked ? '🔒' : c.icon} ${c.name} <small>${locked ? c.unlock + '일차 해금' : c.cost + '→' + c.price + ' · ' + c.grow + '초'}</small></button>`;
+  }).join('');
+  const expCost = EXPAND_COST[S.rows - START_ROWS], sprFull = placed + S.sprStock >= SPR_MAX;
+  $('upgrades').innerHTML =
+    `<button class="btn" data-buy="expand" ${S.rows >= MAX_ROWS || S.coins < expCost ? 'disabled' : ''}>🚜 밭 확장 <small>${S.rows >= MAX_ROWS ? '최대' : expCost + '코인 · +6칸'}</small></button>
+     <button class="btn" data-buy="bigcan" ${S.bigCan || S.coins < BIGCAN_COST ? 'disabled' : ''}>💧 큰 물뿌리개 <small>${S.bigCan ? '보유 중' : BIGCAN_COST + '코인 · 3×3'}</small></button>
+     <button class="btn" data-buy="spr" ${sprFull || S.coins < SPR_COST ? 'disabled' : ''}>🚿 스프링클러 <small>${sprFull ? '최대' : SPR_COST + '코인 · ' + (placed + S.sprStock) + '/' + SPR_MAX}</small></button>`;
+}
+
+// ---------- input ----------
+const grid = $('grid');
+function tileAt(x, y) { const el = document.elementFromPoint(x, y); const t = el && el.closest('.tile'); return t ? +t.dataset.i : -1; }
+function touchTile(i) { if (i < 0 || !stroke || stroke.seen.has(i)) return; stroke.seen.add(i); apply(i); }
+grid.addEventListener('pointerdown', e => {
+  e.preventDefault(); stroke = { seen: new Set(), hinted: false };
+  touchTile(tileAt(e.clientX, e.clientY));
+});
+window.addEventListener('pointermove', e => { if (stroke) touchTile(tileAt(e.clientX, e.clientY)); });
+window.addEventListener('pointerup', () => { stroke = null; });
+window.addEventListener('pointercancel', () => { stroke = null; });
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-tool]'), s = e.target.closest('[data-seed]'), b = e.target.closest('[data-buy]');
+  if (t) S.tool = t.dataset.tool;
+  else if (s && !s.disabled) { S.seed = s.dataset.seed; S.tool = 'seed'; }
+  else if (b && !b.disabled) buy(b.dataset.buy);
+});
+window.addEventListener('keydown', e => {
+  if ($('overlay').classList.contains('show')) {
+    if (e.key === 'Enter') { const p = $('card').querySelector('.primary'); if (p) p.click(); }
+    return;
+  }
+  const tool = TOOLS.find(t => t.key === e.key);
+  if (tool && (tool.id !== 'sprinkler' || S.sprStock > 0)) S.tool = tool.id;
+  if (e.key === 'p' || e.key === 'P' || e.key === 'Escape') pause();
+});
+$('pauseBtn').onclick = pause;
+$('muteBtn').onclick = () => { muted = !muted; store.set('farm_muted', muted ? '1' : '0'); $('muteBtn').textContent = muted ? '🔇' : '🔊'; };
+$('muteBtn').textContent = muted ? '🔇' : '🔊';
+document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
+window.addEventListener('beforeunload', save);
+
+// ---------- loop ----------
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(.25, (now - last) / 1000); last = now;
+  if (running) update(dt);
+  render();
+  requestAnimationFrame(frame);
+}
+buildGrid(); showStart(); requestAnimationFrame(frame);
+</script>
+</body>
+</html>

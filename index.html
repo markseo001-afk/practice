@@ -34,7 +34,7 @@
 <body>
 <header>
   <h1>MINI ARCADE</h1>
-  <p>골라서 즐기는 5가지 미니 게임</p>
+  <p>골라서 즐기는 6가지 미니 게임</p>
 </header>
 <main id="list"></main>
 <footer>최고 기록은 이 브라우저에 저장됩니다.</footer>
@@ -50,6 +50,8 @@ const GAMES = [
     grad: 'linear-gradient(135deg,#7a3b0b,#ffd166)', accent: '#ffd166', key: 'runner_best', fmt: v => v.toLocaleString() + 'm' },
   { href: 'games/memory.html', icon: '🃏', title: '메모리 매치', badge: '퍼즐', desc: '카드를 뒤집어 같은 그림 짝을 찾으세요. 난이도 3단계, 가장 빠른 기록에 도전하세요.',
     grad: 'linear-gradient(135deg,#123a7a,#8fb8ff)', accent: '#8fb8ff', key: 'memory_best_normal', fmt: v => '보통 ' + (v / 10).toFixed(1) + '초' },
+  { href: 'games/farm.html', icon: '🌾', title: '햇살 농장', badge: '경영', desc: '땅을 갈고 씨앗을 심어 물을 주고 수확하세요. 까마귀를 쫓고 밭을 넓혀 매일 목표 수익을 달성하세요.',
+    grad: 'linear-gradient(135deg,#2d5a1b,#c8e66b)', accent: '#b6f06b', key: 'farm_best', fmt: v => v.toLocaleString() + '코인' },
 ];
 const list = document.getElementById('list');
 for (const g of GAMES) {
